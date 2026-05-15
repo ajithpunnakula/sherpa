@@ -10,10 +10,10 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "outDir": "../dist-electron",
-    "rootDir": ".",
+    "rootDir": "..",
     "sourceMap": true,
     "types": ["node"]
   },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["./**/*.ts", "../server/**/*.ts"],
+  "exclude": ["node_modules", "../server/**/*.test.ts"]
 }

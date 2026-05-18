@@ -368,6 +368,9 @@ export function App(): React.JSX.Element {
 
 function AnswerCard({ answer }: { answer: Answer }): React.JSX.Element {
   const parsed = useMemo(() => parseSpeakerAnswer(answer.text), [answer.text]);
+  // 'why' and 'sources' are intentionally NOT shown — too noisy during a live
+  // call. They're still emitted by the LLM and written to the call log
+  // (.data/calls/*.jsonl) for after-the-fact review.
   return (
     <div style={{ padding: "10px 14px 14px", borderBottom: "1px solid var(--border)" }}>
       <div style={{
@@ -397,27 +400,6 @@ function AnswerCard({ answer }: { answer: Answer }): React.JSX.Element {
       )}
 
       {parsed.hero && <div className="hero" style={{ fontSize: 18, marginTop: 2 }}>{parsed.hero}</div>}
-
-      {parsed.why && (
-        <div style={{
-          marginTop: 6,
-          fontSize: 12,
-          color: "var(--text-dim)",
-          letterSpacing: "-0.005em",
-        }}>
-          <span style={{ color: "var(--text-faint)" }}>why: </span>{parsed.why}
-        </div>
-      )}
-
-      {answer.meta && answer.meta.sources.length > 0 && (
-        <div className="sources" style={{ marginTop: 8 }}>
-          {answer.meta.sources.slice(0, 4).map((s, i) => (
-            <span key={i} className="source-pill" title={s.heading ?? s.source}>
-              {prettyPath(s.source)}
-            </span>
-          ))}
-        </div>
-      )}
 
       {!parsed.hero && answer.text && <pre className="raw">{answer.text}</pre>}
 
@@ -487,7 +469,3 @@ function stripOuterQuotes(s: string): string {
   return t;
 }
 
-function prettyPath(p: string): string {
-  const parts = p.split("/");
-  return parts[parts.length - 1] ?? p;
-}

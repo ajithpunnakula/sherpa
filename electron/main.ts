@@ -115,20 +115,23 @@ function trayTitle(): string {
 // Panel window
 // ---------------------------------------------------------------------------
 
+// Side-dock geometry: thin column on the right edge, full work-area height.
+// Resizable so the user can widen it; default fits most laptop screens.
+const PANEL_WIDTH = 380;
+
 function createPanel(): BrowserWindow {
   const display = screen.getPrimaryDisplay();
-  const width = 680;
-  const height = 540;
-  const x = display.workArea.x + Math.round((display.workArea.width - width) / 2);
-  const y = display.workArea.y + 80;
+  const { x: waX, y: waY, width: waW, height: waH } = display.workArea;
+  const x = waX + waW - PANEL_WIDTH;
+  const y = waY;
 
   const win = new BrowserWindow({
-    width,
-    height,
+    width: PANEL_WIDTH,
+    height: waH,
     x,
     y,
-    minWidth: 520,
-    minHeight: 220,
+    minWidth: 280,
+    minHeight: 240,
     show: false,
     frame: false,
     resizable: true,
@@ -154,15 +157,14 @@ function createPanel(): BrowserWindow {
 
   if (isDev) {
     win.loadURL("http://localhost:5173/");
-    // Detached so DevTools doesn't squeeze the small panel window.
+    // Detached so DevTools doesn't squeeze the panel.
     win.webContents.openDevTools({ mode: "detach" });
   } else {
     win.loadFile(join(PROJECT_ROOT, "dist", "index.html"));
   }
 
-  win.on("blur", () => {
-    if (!isDev) win.hide();
-  });
+  // No blur-hide: the side dock is meant to stay visible while the user works
+  // in other apps. Cmd+Shift+Space or the tray icon toggles show/hide.
 
   return win;
 }
@@ -172,24 +174,27 @@ function togglePanel(): void {
   if (panel.isVisible()) {
     panel.hide();
   } else {
-    positionPanelNearTray();
+    dockPanelRight();
     panel.show();
     panel.focus();
     panel.webContents.send("sherpa:focus");
   }
 }
 
-function positionPanelNearTray(): void {
-  if (!panel || !tray) return;
-  const trayBounds = tray.getBounds();
-  const panelBounds = panel.getBounds();
-  const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
-  // Anchor under the tray icon, clamp to display work area.
-  let x = Math.round(trayBounds.x + trayBounds.width / 2 - panelBounds.width / 2);
-  let y = Math.round(trayBounds.y + trayBounds.height + 8);
-  x = Math.max(display.workArea.x + 8, Math.min(x, display.workArea.x + display.workArea.width - panelBounds.width - 8));
-  y = Math.max(display.workArea.y + 8, y);
-  panel.setBounds({ x, y, width: panelBounds.width, height: panelBounds.height });
+function dockPanelRight(): void {
+  if (!panel) return;
+  const pt = tray ? tray.getBounds() : { x: 0, y: 0, width: 0, height: 0 };
+  const display = tray
+    ? screen.getDisplayNearestPoint({ x: pt.x, y: pt.y })
+    : screen.getPrimaryDisplay();
+  const { x: waX, y: waY, width: waW, height: waH } = display.workArea;
+  const currentWidth = panel.getBounds().width || PANEL_WIDTH;
+  panel.setBounds({
+    x: waX + waW - currentWidth,
+    y: waY,
+    width: currentWidth,
+    height: waH,
+  });
 }
 
 // ---------------------------------------------------------------------------

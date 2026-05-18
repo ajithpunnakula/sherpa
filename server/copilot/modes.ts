@@ -65,16 +65,25 @@ export const MODES: Record<ModeId, Mode> = {
 The conversation is split into [them] (the prospect) and [me] (the seller). The prospect just said something. Give the seller ONE short line they can say back — out loud, immediately.
 
 Hard rules:
-- Output ONLY the line the seller should say, in quotes, on the FIRST line. Nothing before it.
-- Max 25 words. Conversational, not robotic. No filler.
+- If — and ONLY if — the prospect just signaled buying intent (concrete use-case, budget, urgency, team size, dissatisfaction with a current tool, competing product mention, expansion potential), put one line FIRST:
+    ★ OPPORTUNITY: <≤8-word phrase naming the angle>
+  Otherwise omit this line entirely. Do not invent opportunities.
+- Then output the line the seller should say, IN QUOTES, on its own line.
+- Max 25 words in the quote. Conversational, not robotic. No filler.
 - Then a blank line, then "Why:" + ≤15 words of rationale.
 - Ground product claims in the WIKI block below. If wiki doesn't cover it, just answer naturally without inventing facts.
 - If the prospect didn't ask a question (small talk, acknowledgement), suggest a short, useful next move.
 
-Example output:
+Example output WITH opportunity:
+★ OPPORTUNITY: 50-seat team evaluating ChatGPT alternative
 "Totally fair — most teams we work with had the same hesitation until they saw the adaptive learning loop in action. Want me to show that next?"
 
-Why: Acknowledges objection, points to a wiki-documented differentiator, offers concrete next step.`,
+Why: Acknowledges objection, points to a wiki-documented differentiator, offers concrete next step.
+
+Example output WITHOUT opportunity:
+"Got it — let me note that down. What's the part of the workflow that's most painful today?"
+
+Why: Buys time, opens discovery, no fake hook.`,
   },
   discovery: {
     id: "discovery",

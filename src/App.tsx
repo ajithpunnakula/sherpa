@@ -4,7 +4,6 @@ import {
   api,
   type SherpaMeta,
   type CopilotMeta,
-  type CopilotSource,
   type StreamFrame,
   type Turn,
 } from "./lib/sherpa";
@@ -13,6 +12,18 @@ import { Listener, type ListenStatus, type TranscriptEvent } from "./lib/listen"
 type AppStatus = "idle" | "thinking" | "ready";
 
 const HISTORY_LIMIT = 8;
+const DEBOUNCE_MS = 600;
+const MAX_VISIBLE_ANSWERS = 20;
+
+interface Answer {
+  id: string;
+  question: string;            // the "them" utterance(s) this responds to
+  text: string;                 // streaming-accumulated raw LLM text
+  meta: CopilotMeta | null;
+  latencyMs: number | null;
+  streaming: boolean;
+  errored?: string | null;
+}
 
 export function App(): React.JSX.Element {
   const [status, setStatus] = useState<AppStatus>("idle");
@@ -22,20 +33,33 @@ export function App(): React.JSX.Element {
   const [levelMe, setLevelMe] = useState(0);
   const [levelThem, setLevelThem] = useState(0);
   const [history, setHistory] = useState<Turn[]>([]);
-  const [latestThem, setLatestThem] = useState<string | null>(null);
-  const [answer, setAnswer] = useState<string>("");
-  const [answerMeta, setAnswerMeta] = useState<CopilotMeta | null>(null);
-  const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [answers, setAnswers] = useState<Answer[]>([]);
   const [showTranscript, setShowTranscript] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualText, setManualText] = useState("");
   const manualRef = useRef<HTMLTextAreaElement>(null);
 
   const listenerRef = useRef<Listener | null>(null);
-  const streamIdRef = useRef<string | null>(null);
   const historyRef = useRef<Turn[]>([]);
 
+  // Debounce state — coalesce rapid 'them' chunks into a single LLM call.
+  const pendingQuestionRef = useRef<string>("");
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Map of active stream id → answer id, so cancellation routes to the right card.
+  const activeStreamRef = useRef<string | null>(null);
+
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => { historyRef.current = history; }, [history]);
+
+  // Auto-scroll the answer list to bottom whenever it changes.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    // requestAnimationFrame so layout is flushed first.
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, [answers]);
 
   useEffect(() => {
     const a = api();
@@ -50,65 +74,87 @@ export function App(): React.JSX.Element {
   }, []);
 
   const handleStreamFrame = useCallback((frame: StreamFrame) => {
-    if (frame.id !== streamIdRef.current) return;       // stale frame from a cancelled stream
-    if (frame.kind === "meta") {
-      setAnswerMeta(frame.meta);
-      setAnswer("");
-      setLatencyMs(null);
-    } else if (frame.kind === "token") {
-      setAnswer((prev) => prev + frame.delta);
-    } else if (frame.kind === "done") {
-      setLatencyMs(frame.latencyMs);
-      setStatus("ready");
-      streamIdRef.current = null;
-    } else if (frame.kind === "error") {
-      setError(frame.message);
-      setStatus("idle");
-      streamIdRef.current = null;
+    if (frame.id !== activeStreamRef.current) return; // stale
+    setAnswers((prev) => {
+      const next = [...prev];
+      const idx = next.findIndex((a) => a.id === frame.id);
+      if (idx < 0) return prev;
+      const cur = next[idx]!;
+      if (frame.kind === "meta") {
+        next[idx] = { ...cur, meta: frame.meta };
+      } else if (frame.kind === "token") {
+        next[idx] = { ...cur, text: cur.text + frame.delta };
+      } else if (frame.kind === "done") {
+        next[idx] = { ...cur, latencyMs: frame.latencyMs, streaming: false };
+      } else if (frame.kind === "error") {
+        next[idx] = { ...cur, streaming: false, errored: frame.message };
+      }
+      return next;
+    });
+    if (frame.kind === "done" || frame.kind === "error") {
+      activeStreamRef.current = null;
     }
   }, []);
 
-  const kickStream = useCallback(async (latestPromptContext: string) => {
-    // Cancel any in-flight stream — the prospect kept talking or we got new context.
-    const prevId = streamIdRef.current;
-    if (prevId) {
-      try { await api().cancelStream(prevId); } catch {}
-    }
+  // Kicks an LLM call for `question`. Cancels any prior in-flight stream and
+  // appends a new pending Answer card to the list.
+  const fireStream = useCallback(async (question: string) => {
+    const prevId = activeStreamRef.current;
+    if (prevId) { try { await api().cancelStream(prevId); } catch {} }
+
     const id = `s_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    streamIdRef.current = id;
-    setAnswer("");
-    setAnswerMeta(null);
-    setLatencyMs(null);
+    activeStreamRef.current = id;
     setError(null);
     setStatus("thinking");
+    setAnswers((prev) => {
+      const next: Answer[] = [
+        ...prev,
+        { id, question, text: "", meta: null, latencyMs: null, streaming: true },
+      ];
+      if (next.length > MAX_VISIBLE_ANSWERS) next.splice(0, next.length - MAX_VISIBLE_ANSWERS);
+      return next;
+    });
     try {
       await api().runStream({
         id,
         mode: "speaker",
-        context: latestPromptContext,
+        context: question,
         history: historyRef.current.slice(-HISTORY_LIMIT),
       });
     } catch (err) {
-      if (streamIdRef.current === id) {
+      if (activeStreamRef.current === id) {
         setError((err as Error).message);
         setStatus("idle");
-        streamIdRef.current = null;
+        activeStreamRef.current = null;
       }
     }
   }, []);
 
+  // Debounced: accumulate consecutive 'them' chunks for 600ms before firing.
+  // Prevents a single sentence chopped into 3s windows from triggering 2-3
+  // overlapping LLM calls.
+  const scheduleStream = useCallback((themText: string) => {
+    pendingQuestionRef.current = pendingQuestionRef.current
+      ? pendingQuestionRef.current.replace(/[.\s]*$/, "") + " " + themText
+      : themText;
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      const q = pendingQuestionRef.current.trim();
+      pendingQuestionRef.current = "";
+      debounceTimerRef.current = null;
+      if (q) void fireStream(q);
+    }, DEBOUNCE_MS);
+  }, [fireStream]);
+
   const onTranscript = useCallback((evt: TranscriptEvent) => {
     api().transcript(evt);
     setHistory((prev) => {
-      const next = [...prev, { source: evt.source, text: evt.text }];
+      const next: Turn[] = [...prev, { source: evt.source, text: evt.text }];
       if (next.length > HISTORY_LIMIT * 2) next.splice(0, next.length - HISTORY_LIMIT * 2);
       return next;
     });
-    if (evt.source === "them") {
-      setLatestThem(evt.text);
-      void kickStream(evt.text);
-    }
-  }, [kickStream]);
+    if (evt.source === "them") scheduleStream(evt.text);
+  }, [scheduleStream]);
 
   const toggleListen = useCallback(async () => {
     if (listenerRef.current) {
@@ -133,9 +179,11 @@ export function App(): React.JSX.Element {
     }
   }, [onTranscript]);
 
-  useEffect(() => () => { listenerRef.current?.stop(); }, []);
+  useEffect(() => () => {
+    listenerRef.current?.stop();
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+  }, []);
 
-  // Esc closes drawers, then hides the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -144,15 +192,41 @@ export function App(): React.JSX.Element {
         else api().hide();
       } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && manualOpen) {
         e.preventDefault();
-        if (manualText.trim()) void kickStream(manualText.trim());
+        if (manualText.trim()) submitManual();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showTranscript, manualOpen, manualText, kickStream]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTranscript, manualOpen, manualText]);
 
-  const parsed = useMemo(() => parseSpeakerAnswer(answer), [answer]);
+  const submitManual = useCallback(() => {
+    const txt = manualText.trim();
+    if (!txt) return;
+    setHistory((prev) => [...prev, { source: "them" as const, text: txt }].slice(-HISTORY_LIMIT * 2));
+    setManualText("");
+    void fireStream(txt);
+  }, [manualText, fireStream]);
+
+  const clearAnswers = useCallback(() => {
+    setAnswers([]);
+    setHistory([]);
+    setError(null);
+  }, []);
+
   const meterLevel = Math.max(levelMe, levelThem);
+  const latestMeta = useMemo(() => {
+    for (let i = answers.length - 1; i >= 0; i--) {
+      if (answers[i]!.meta) return answers[i]!.meta!;
+    }
+    return null;
+  }, [answers]);
+  const latestLatency = useMemo(() => {
+    for (let i = answers.length - 1; i >= 0; i--) {
+      if (answers[i]!.latencyMs !== null) return answers[i]!.latencyMs!;
+    }
+    return null;
+  }, [answers]);
 
   return (
     <div className="shell">
@@ -190,58 +264,43 @@ export function App(): React.JSX.Element {
             title="Manual prompt"
           >✎</button>
 
+          {answers.length > 0 && (
+            <button className="icon-btn" onClick={clearAnswers} title="Clear conversation">⌫</button>
+          )}
+
           <button className="icon-btn" onClick={() => api().hide()} title="Hide (Esc)">✕</button>
         </header>
 
-        {latestThem && (
-          <div className="live-question" style={{
-            fontSize: 12,
-            color: "var(--text-faint)",
-            padding: "6px 14px 0",
-            letterSpacing: "-0.005em",
-          }}>
-            <span style={{ opacity: 0.7 }}>they said: </span>
-            <span style={{ color: "var(--text-dim)" }}>{latestThem}</span>
-          </div>
-        )}
+        <div className="answer" ref={scrollerRef} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {answers.length === 0 && (
+            <div style={{
+              padding: "32px 14px",
+              color: "var(--text-faint)",
+              fontSize: 13,
+              textAlign: "center",
+              letterSpacing: "-0.005em",
+            }}>
+              {listen.kind === "idle"
+                ? "Click Listen to start. Answers appear here as the prospect speaks."
+                : "Listening — answers will stream in as the prospect speaks."}
+            </div>
+          )}
 
-        {status === "thinking" && !answer && <div className="shimmer" />}
+          {answers.map((ans) => (
+            <AnswerCard key={ans.id} answer={ans} />
+          ))}
 
-        {(answer || parsed.hero) && (
-          <div className="answer">
-            {parsed.hero && (
-              <div className="hero">{parsed.hero}</div>
-            )}
-            {parsed.why && (
-              <div className="details">
-                <div className="detail">
-                  <div className="detail-label">Why</div>
-                  <div className="detail-body dim">{parsed.why}</div>
-                </div>
-                {answerMeta && answerMeta.sources.length > 0 && (
-                  <div className="detail">
-                    <div className="detail-label">Sources</div>
-                    <div className="sources">
-                      {answerMeta.sources.map((s, i) => (
-                        <span key={i} className="source-pill" title={s.heading ?? s.source}>
-                          {prettyPath(s.source)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            {!parsed.hero && answer && <pre className="raw">{answer}</pre>}
-          </div>
-        )}
+          {status === "thinking" && answers.length > 0 && answers[answers.length - 1]!.text === "" && (
+            <div className="shimmer" style={{ margin: "0 14px" }} />
+          )}
+        </div>
 
         {showTranscript && (
-          <div className="answer" style={{ borderTop: "1px solid var(--border)", marginTop: 8 }}>
-            <div className="detail-label" style={{ padding: "0 14px" }}>Conversation</div>
-            <div style={{ padding: "4px 14px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div className="answer" style={{ borderTop: "1px solid var(--border)", maxHeight: 200, overflowY: "auto" }}>
+            <div className="detail-label" style={{ padding: "8px 14px 4px" }}>Full transcript</div>
+            <div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
               {history.length === 0 && (
-                <span style={{ color: "var(--text-faint)", fontSize: 12 }}>(no transcript yet — start listening)</span>
+                <span style={{ color: "var(--text-faint)", fontSize: 12 }}>(empty)</span>
               )}
               {history.map((t, i) => (
                 <div key={i} style={{ fontSize: 12, display: "flex", gap: 8 }}>
@@ -275,14 +334,7 @@ export function App(): React.JSX.Element {
               <button
                 className="assist"
                 disabled={!manualText.trim() || status === "thinking"}
-                onClick={() => {
-                  const txt = manualText.trim();
-                  if (!txt) return;
-                  setLatestThem(txt);
-                  setHistory((prev) => [...prev, { source: "them" as const, text: txt }].slice(-HISTORY_LIMIT * 2));
-                  setManualText("");
-                  void kickStream(txt);
-                }}
+                onClick={submitManual}
               >{status === "thinking" ? "Thinking…" : "Ask"}</button>
             </div>
           </div>
@@ -291,14 +343,14 @@ export function App(): React.JSX.Element {
         {error && <div className="error">{error}</div>}
 
         <footer className="footer">
-          {answerMeta ? (
+          {latestMeta ? (
             <>
-              <span className={answerMeta.grounded ? "grounded" : "generic"}>
-                {answerMeta.grounded ? "● wiki-grounded" : "● generic"}
+              <span className={latestMeta.grounded ? "grounded" : "generic"}>
+                {latestMeta.grounded ? "● wiki-grounded" : "● generic"}
               </span>
               <span>·</span>
-              <span>{answerMeta.model}</span>
-              {latencyMs !== null && (<><span>·</span><span>{latencyMs}ms</span></>)}
+              <span>{latestMeta.model}</span>
+              {latestLatency !== null && (<><span>·</span><span>{latestLatency}ms</span></>)}
             </>
           ) : (
             <>
@@ -314,30 +366,101 @@ export function App(): React.JSX.Element {
   );
 }
 
+function AnswerCard({ answer }: { answer: Answer }): React.JSX.Element {
+  const parsed = useMemo(() => parseSpeakerAnswer(answer.text), [answer.text]);
+  return (
+    <div style={{ padding: "10px 14px 14px", borderBottom: "1px solid var(--border)" }}>
+      <div style={{
+        fontSize: 11,
+        color: "var(--text-faint)",
+        marginBottom: 4,
+        letterSpacing: "-0.005em",
+        opacity: 0.85,
+      }}>
+        <span style={{ opacity: 0.7 }}>they said: </span>
+        <span style={{ color: "var(--text-dim)" }}>{answer.question}</span>
+      </div>
+
+      {parsed.opportunity && (
+        <div style={{
+          display: "inline-block",
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: "0.02em",
+          color: "var(--good, #6ee7a3)",
+          background: "rgba(110, 231, 163, 0.10)",
+          border: "1px solid rgba(110, 231, 163, 0.30)",
+          borderRadius: 999,
+          padding: "2px 8px",
+          marginBottom: 6,
+        }}>★ {parsed.opportunity}</div>
+      )}
+
+      {parsed.hero && <div className="hero" style={{ fontSize: 18, marginTop: 2 }}>{parsed.hero}</div>}
+
+      {parsed.why && (
+        <div style={{
+          marginTop: 6,
+          fontSize: 12,
+          color: "var(--text-dim)",
+          letterSpacing: "-0.005em",
+        }}>
+          <span style={{ color: "var(--text-faint)" }}>why: </span>{parsed.why}
+        </div>
+      )}
+
+      {answer.meta && answer.meta.sources.length > 0 && (
+        <div className="sources" style={{ marginTop: 8 }}>
+          {answer.meta.sources.slice(0, 4).map((s, i) => (
+            <span key={i} className="source-pill" title={s.heading ?? s.source}>
+              {prettyPath(s.source)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {!parsed.hero && answer.text && <pre className="raw">{answer.text}</pre>}
+
+      {answer.errored && (
+        <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{answer.errored}</div>
+      )}
+    </div>
+  );
+}
+
 interface ParsedSpeakerAnswer {
+  opportunity: string | null;
   hero: string | null;
   why: string | null;
 }
 
 /**
  * Speaker mode emits:
- *   "<quoted line for the seller>"
+ *   [★ OPPORTUNITY: ...]    (optional, first line)
+ *   "<quoted seller line>"
  *   <blank line>
  *   Why: <short rationale>
- *
- * Fall back to showing the raw text if the model wandered off-format.
  */
 function parseSpeakerAnswer(raw: string): ParsedSpeakerAnswer {
   const trimmed = raw.trim();
-  if (!trimmed) return { hero: null, why: null };
+  if (!trimmed) return { opportunity: null, hero: null, why: null };
 
   const lines = trimmed.split(/\r?\n/);
+  let opportunity: string | null = null;
   let hero: string | null = null;
   let why: string | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (!line) continue;
+
+    if (opportunity === null && hero === null) {
+      const opp = line.match(/^[★*]?\s*OPPORTUNITY\s*:\s*(.*)$/i);
+      if (opp) {
+        opportunity = opp[1]!.trim().replace(/^[★*\s]+|[★*\s]+$/g, "");
+        continue;
+      }
+    }
     if (hero === null) {
       hero = stripOuterQuotes(line);
       continue;
@@ -345,7 +468,6 @@ function parseSpeakerAnswer(raw: string): ParsedSpeakerAnswer {
     const m = line.match(/^why\s*:\s*(.*)$/i);
     if (m) {
       why = m[1]!.trim();
-      // gather any continuation lines
       for (let j = i + 1; j < lines.length; j++) {
         const more = lines[j]!.trim();
         if (more) why += " " + more;
@@ -354,7 +476,7 @@ function parseSpeakerAnswer(raw: string): ParsedSpeakerAnswer {
     }
   }
 
-  return { hero, why };
+  return { opportunity, hero, why };
 }
 
 function stripOuterQuotes(s: string): string {

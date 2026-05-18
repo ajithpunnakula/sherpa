@@ -37,7 +37,15 @@ export function App(): React.JSX.Element {
   const [showTranscript, setShowTranscript] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualText, setManualText] = useState("");
+  const [transparent, setTransparent] = useState<boolean>(() => {
+    try { return localStorage.getItem("sherpa.transparent") === "1"; } catch { return false; }
+  });
   const manualRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    document.body.dataset.transparent = transparent ? "true" : "false";
+    try { localStorage.setItem("sherpa.transparent", transparent ? "1" : "0"); } catch {}
+  }, [transparent]);
 
   const listenerRef = useRef<Listener | null>(null);
   const historyRef = useRef<Turn[]>([]);
@@ -267,6 +275,12 @@ export function App(): React.JSX.Element {
           {answers.length > 0 && (
             <button className="icon-btn" onClick={clearAnswers} title="Clear conversation">⌫</button>
           )}
+
+          <button
+            className="icon-btn"
+            onClick={() => setTransparent((v) => !v)}
+            title={transparent ? "Make panel solid" : "Make panel transparent"}
+          >{transparent ? "◐" : "◑"}</button>
 
           <button className="icon-btn" onClick={() => api().hide()} title="Hide (Esc)">✕</button>
         </header>

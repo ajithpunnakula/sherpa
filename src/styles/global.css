@@ -8,8 +8,8 @@
 */
 
 :root {
-  --bg:        rgba(12, 12, 14, 0.18);
-  --bg-strong: rgba(18, 18, 22, 0.55);
+  --bg:        rgba(12, 12, 14, 0.88);
+  --bg-strong: rgba(18, 18, 22, 0.96);
   --stroke:    rgba(255, 255, 255, 0.06);
   --stroke-2:  rgba(255, 255, 255, 0.12);
   --stroke-3:  rgba(255, 255, 255, 0.22);
@@ -40,6 +40,14 @@
   --mono:      ui-monospace, "SF Mono", Menlo, monospace;
   --sans:      -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
   --display:   "SF Pro Display", -apple-system, "Inter", system-ui, sans-serif;
+}
+
+/* Transparent mode — toggled by the eye icon in the title bar. Only overrides
+   the panel background; text stays legible via the existing .hero text-shadow
+   and bumped caption contrast in AnswerCard. */
+body[data-transparent="true"] {
+  --bg:        rgba(12, 12, 14, 0.18);
+  --bg-strong: rgba(18, 18, 22, 0.55);
 }
 
 * { box-sizing: border-box; }

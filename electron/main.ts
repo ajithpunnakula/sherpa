@@ -139,8 +139,9 @@ function createPanel(): BrowserWindow {
     resizable: true,
     transparent: true,
     hasShadow: false,
-    vibrancy: "hud",
-    visualEffectState: "active",
+    // No vibrancy — it draws an opaque-ish NSVisualEffectView behind the
+    // webview that defeats CSS transparency. Backdrop-filter on .glass
+    // blurs the actual desktop pixels for legibility.
     alwaysOnTop: true,
     skipTaskbar: true,
     fullscreenable: false,

@@ -2,16 +2,16 @@ import { describe, it, expect } from "vitest";
 import { selectProvider, type ProviderEnv } from "./providers.js";
 
 describe("selectProvider", () => {
-  it("prefers anthropic when both keys are present", () => {
+  it("prefers openai when both keys are present (faster streaming for live calls)", () => {
     const env: ProviderEnv = { ANTHROPIC_API_KEY: "sk-ant-x", OPENAI_API_KEY: "sk-oai-x" };
     const p = selectProvider(env);
-    expect(p.kind).toBe("anthropic");
+    expect(p.kind).toBe("openai");
   });
 
-  it("falls back to openai when only OPENAI_API_KEY is set", () => {
-    const env: ProviderEnv = { OPENAI_API_KEY: "sk-oai-x" };
+  it("falls back to anthropic when only ANTHROPIC_API_KEY is set", () => {
+    const env: ProviderEnv = { ANTHROPIC_API_KEY: "sk-ant-x" };
     const p = selectProvider(env);
-    expect(p.kind).toBe("openai");
+    expect(p.kind).toBe("anthropic");
   });
 
   it("returns a stub provider when no keys are present", () => {

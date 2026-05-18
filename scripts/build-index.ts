@@ -44,7 +44,7 @@ async function* walk(dir: string): AsyncGenerator<string> {
 }
 
 async function main(): Promise<void> {
-  console.log(`Cluely indexer`);
+  console.log(`Sherpa indexer`);
   console.log(`  Source repo: ${REPO}`);
   console.log(`  Output:      ${OUT}`);
 

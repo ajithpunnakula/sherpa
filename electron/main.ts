@@ -1,7 +1,66 @@
-import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, shell, screen, systemPreferences } from "electron";
-import { promises as fs, existsSync } from "node:fs";
+import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, shell, screen, systemPreferences, session, desktopCapturer } from "electron";
+import { promises as fs, existsSync, createWriteStream, mkdirSync, WriteStream } from "node:fs";
 import { join, resolve } from "node:path";
 import { CopilotService } from "./service";
+
+// ---------------------------------------------------------------------------
+// File logger — every meaningful event goes here so we can `tail -f` and so a
+// future Claude session can read the log without screenshots.
+// ---------------------------------------------------------------------------
+
+let logStream: WriteStream | null = null;
+let logPath = "";
+
+function initLogger(projectRoot: string): void {
+  const dir = join(projectRoot, ".data");
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+  logPath = join(dir, "sherpa-dev.log");
+  logStream = createWriteStream(logPath, { flags: "a" });
+  const banner = `\n=== sherpa dev session started ${new Date().toISOString()} (pid ${process.pid}) ===\n`;
+  logStream.write(banner);
+  // eslint-disable-next-line no-console
+  console.log("[sherpa] log file:", logPath);
+
+  // Capture main-process console as well.
+  const orig = { log: console.log, warn: console.warn, error: console.error };
+  const wrap = (level: "log" | "warn" | "error") => (...args: unknown[]) => {
+    orig[level](...args);
+    log(level === "log" ? "info" : level, "main", args.map(fmtArg).join(" "));
+  };
+  console.log = wrap("log");
+  console.warn = wrap("warn");
+  console.error = wrap("error");
+
+  process.on("uncaughtException", (err) => log("error", "main", "uncaughtException " + (err.stack ?? err.message)));
+  process.on("unhandledRejection", (reason) => log("error", "main", "unhandledRejection " + String(reason)));
+}
+
+function fmtArg(a: unknown): string {
+  if (typeof a === "string") return a;
+  try { return JSON.stringify(a); } catch { return String(a); }
+}
+
+function log(level: "info" | "warn" | "error", src: string, msg: string): void {
+  if (!logStream) return;
+  const line = `${new Date().toISOString()} [${src}] [${level}] ${msg}\n`;
+  logStream.write(line);
+}
+
+// Per-call transcript log. One JSONL file per app session, lazily created on
+// first transcript chunk. Lives alongside sherpa-dev.log so it's easy to find.
+let callLogStream: WriteStream | null = null;
+let callLogPath = "";
+
+function appendCallLog(entry: { source: "me" | "them"; text: string; ts: number }): void {
+  if (!callLogStream) {
+    const dir = join(PROJECT_ROOT, ".data", "calls");
+    try { mkdirSync(dir, { recursive: true }); } catch {}
+    callLogPath = join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
+    callLogStream = createWriteStream(callLogPath, { flags: "a" });
+    console.log("[sherpa] call log:", callLogPath);
+  }
+  callLogStream.write(JSON.stringify(entry) + "\n");
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -10,7 +69,7 @@ import { CopilotService } from "./service";
 const isDev = process.env.NODE_ENV === "development";
 // At build time main.js lives at dist-electron/electron/main.js → project root is two levels up.
 const PROJECT_ROOT = resolve(__dirname, "..", "..");
-const INDEX_PATH = process.env.CLUELY_INDEX ?? join(PROJECT_ROOT, ".data", "index.json");
+const INDEX_PATH = process.env.SHERPA_INDEX ?? join(PROJECT_ROOT, ".data", "index.json");
 
 let panel: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -46,9 +105,9 @@ function makeTrayImage(): Electron.NativeImage {
 
 function trayTitle(): string {
   switch (appStatus) {
-    case "thinking": return " Cluely…";
-    case "ready":    return " Cluely ✓";
-    default:         return " Cluely";
+    case "thinking": return " Sherpa…";
+    case "ready":    return " Sherpa ✓";
+    default:         return " Sherpa";
   }
 }
 
@@ -58,26 +117,29 @@ function trayTitle(): string {
 
 function createPanel(): BrowserWindow {
   const display = screen.getPrimaryDisplay();
-  const width = 520;
-  const height = 640;
-  const x = display.workArea.x + display.workArea.width - width - 24;
-  const y = display.workArea.y + 32;
+  const width = 680;
+  const height = 540;
+  const x = display.workArea.x + Math.round((display.workArea.width - width) / 2);
+  const y = display.workArea.y + 80;
 
   const win = new BrowserWindow({
     width,
     height,
     x,
     y,
+    minWidth: 520,
+    minHeight: 220,
     show: false,
     frame: false,
     resizable: true,
     transparent: true,
-    vibrancy: "under-window",
+    hasShadow: false,
+    vibrancy: "hud",
     visualEffectState: "active",
     alwaysOnTop: true,
     skipTaskbar: true,
     fullscreenable: false,
-    titleBarStyle: "hiddenInset",
+    roundedCorners: true,
     backgroundColor: "#00000000",
     webPreferences: {
       preload: join(__dirname, "preload.js"),
@@ -92,6 +154,8 @@ function createPanel(): BrowserWindow {
 
   if (isDev) {
     win.loadURL("http://localhost:5173/");
+    // Detached so DevTools doesn't squeeze the small panel window.
+    win.webContents.openDevTools({ mode: "detach" });
   } else {
     win.loadFile(join(PROJECT_ROOT, "dist", "index.html"));
   }
@@ -111,7 +175,7 @@ function togglePanel(): void {
     positionPanelNearTray();
     panel.show();
     panel.focus();
-    panel.webContents.send("cluely:focus");
+    panel.webContents.send("sherpa:focus");
   }
 }
 
@@ -135,7 +199,7 @@ function positionPanelNearTray(): void {
 function buildTrayMenu(): Menu {
   const indexInfo = copilot?.indexInfo();
   return Menu.buildFromTemplate([
-    { label: "Cluely — Sales Copilot", enabled: false },
+    { label: "Sherpa — Sales Copilot", enabled: false },
     { type: "separator" },
     { label: `Mode: ${appStatus}`, enabled: false },
     {
@@ -178,7 +242,7 @@ function buildTrayMenu(): Menu {
       ],
     },
     { type: "separator" },
-    { label: "Quit Cluely", click: () => app.quit() },
+    { label: "Quit Sherpa", click: () => app.quit() },
   ]);
 }
 
@@ -203,33 +267,82 @@ async function reloadIndex(): Promise<void> {
     await copilot.load(INDEX_PATH);
     appStatus = "idle";
     refreshTray();
-    panel?.webContents.send("cluely:index-loaded", copilot.indexInfo());
+    panel?.webContents.send("sherpa:index-loaded", copilot.indexInfo());
   } catch (err) {
-    panel?.webContents.send("cluely:error", { message: (err as Error).message });
+    panel?.webContents.send("sherpa:error", { message: (err as Error).message });
   }
 }
 
+// Active streaming requests, keyed by client-supplied id so the renderer can cancel.
+const activeStreams = new Map<string, AbortController>();
+
 function registerIpc(): void {
-  ipcMain.handle("cluely:run", async (_e, payload: { mode: string; context: string; preferred?: "anthropic" | "openai" }) => {
+  ipcMain.handle("sherpa:run", async (_e, payload: { mode: string; context: string; history?: import("../server/copilot/orchestrator").Turn[]; preferred?: "anthropic" | "openai" }) => {
     if (!copilot) throw new Error("Copilot not initialized");
     appStatus = "thinking";
     refreshTray();
-    panel?.webContents.send("cluely:status", appStatus);
+    panel?.webContents.send("sherpa:status", appStatus);
     try {
       const result = await copilot.run(payload);
       appStatus = "ready";
       refreshTray();
-      panel?.webContents.send("cluely:status", appStatus);
+      panel?.webContents.send("sherpa:status", appStatus);
       return result;
     } catch (err) {
       appStatus = "idle";
       refreshTray();
-      panel?.webContents.send("cluely:status", appStatus);
+      panel?.webContents.send("sherpa:status", appStatus);
       throw err;
     }
   });
 
-  ipcMain.handle("cluely:meta", async () => {
+  ipcMain.handle("sherpa:run-stream", async (e, payload: { id: string; mode: string; context: string; history?: import("../server/copilot/orchestrator").Turn[]; preferred?: "anthropic" | "openai" }) => {
+    if (!copilot) throw new Error("Copilot not initialized");
+    const { id } = payload;
+    // Cancel any prior stream with the same id.
+    activeStreams.get(id)?.abort();
+    const ac = new AbortController();
+    activeStreams.set(id, ac);
+    appStatus = "thinking";
+    refreshTray();
+    e.sender.send("sherpa:status", appStatus);
+    (async () => {
+      try {
+        const stream = copilot!.runStream(payload, ac.signal);
+        for await (const frame of stream) {
+          if (ac.signal.aborted) break;
+          e.sender.send("sherpa:stream", { id, ...frame });
+        }
+        if (!ac.signal.aborted) {
+          appStatus = "ready";
+          refreshTray();
+          e.sender.send("sherpa:status", appStatus);
+        }
+      } catch (err) {
+        if (!ac.signal.aborted) {
+          e.sender.send("sherpa:stream", { id, kind: "error", message: (err as Error).message });
+          appStatus = "idle";
+          refreshTray();
+          e.sender.send("sherpa:status", appStatus);
+        }
+      } finally {
+        if (activeStreams.get(id) === ac) activeStreams.delete(id);
+      }
+    })();
+    return { id };
+  });
+
+  ipcMain.handle("sherpa:cancel-stream", async (_e, id: string) => {
+    activeStreams.get(id)?.abort();
+    activeStreams.delete(id);
+    return true;
+  });
+
+  ipcMain.on("sherpa:transcript", (_e, payload: { source: "me" | "them"; text: string; ts: number }) => {
+    appendCallLog(payload);
+  });
+
+  ipcMain.handle("sherpa:meta", async () => {
     return {
       indexInfo: copilot?.indexInfo() ?? null,
       providerKind: copilot?.providerKind() ?? "stub",
@@ -241,7 +354,7 @@ function registerIpc(): void {
     };
   });
 
-  ipcMain.handle("cluely:open-perms", async (_e, which: "microphone" | "screen" | "accessibility") => {
+  ipcMain.handle("sherpa:open-perms", async (_e, which: "microphone" | "screen" | "accessibility") => {
     if (process.platform !== "darwin") return false;
     if (which === "microphone") {
       return systemPreferences.askForMediaAccess("microphone");
@@ -253,13 +366,16 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.handle("cluely:hide", () => {
+  ipcMain.handle("sherpa:hide", () => {
     panel?.hide();
   });
 
-  ipcMain.on("cluely:log", (_e, msg: unknown) => {
-    // eslint-disable-next-line no-console
-    console.log("[renderer]", msg);
+  ipcMain.on("sherpa:log", (_e, payload: { level?: "info" | "warn" | "error"; src?: string; msg?: string } | string) => {
+    if (typeof payload === "string") {
+      log("info", "renderer", payload);
+      return;
+    }
+    log(payload?.level ?? "info", payload?.src ?? "renderer", payload?.msg ?? "");
   });
 }
 
@@ -267,9 +383,45 @@ function registerIpc(): void {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+function registerMediaPermissions(): void {
+  const s = session.defaultSession;
+
+  // Grant mic/camera/display permission requests from the renderer.
+  s.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (permission === "media" || permission === "display-capture") {
+      callback(true);
+      return;
+    }
+    callback(false);
+  });
+
+  // Required for getDisplayMedia: tell Electron which source to share.
+  // We hand back the primary display's audio loopback (entire screen) so the
+  // renderer can capture system audio. The video track is required by the API
+  // but the renderer discards it immediately.
+  s.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ["screen"] });
+      const primary = sources[0];
+      if (!primary) {
+        callback({});
+        return;
+      }
+      // `enableLocalAudio: true` enables loopback audio capture on macOS 13+.
+      callback({ video: primary, audio: "loopback" });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("setDisplayMediaRequestHandler failed:", err);
+      callback({});
+    }
+  }, { useSystemPicker: false });
+}
+
 app.whenReady().then(async () => {
+  initLogger(PROJECT_ROOT);
   // Load .env if present (very small, no need for a dep)
   await loadDotEnv(join(PROJECT_ROOT, ".env"));
+  registerMediaPermissions();
 
   copilot = new CopilotService({
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -289,7 +441,7 @@ app.whenReady().then(async () => {
 
   tray = new Tray(makeTrayImage());
   tray.setTitle(trayTitle());
-  tray.setToolTip("Cluely · Sales Copilot");
+  tray.setToolTip("Sherpa · Sales Copilot");
   tray.setContextMenu(buildTrayMenu());
   tray.on("click", () => togglePanel());
 

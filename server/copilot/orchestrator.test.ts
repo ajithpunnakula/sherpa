@@ -15,6 +15,8 @@ function fakeProvider(text: string): Provider {
     kind: "stub",
     model: "fake",
     complete: vi.fn(async () => text),
+    // eslint-disable-next-line require-yield
+    completeStream: vi.fn(async function* () { yield text; }),
   };
 }
 

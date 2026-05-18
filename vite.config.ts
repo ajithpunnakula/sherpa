@@ -11,6 +11,14 @@ export default defineConfig({
       "@server": resolve(__dirname, "server"),
     },
   },
+  // @huggingface/transformers ships its own WASM + dynamic imports; let vite
+  // load it directly instead of pre-bundling.
+  optimizeDeps: {
+    exclude: ["@huggingface/transformers"],
+  },
+  worker: {
+    format: "es",
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -23,5 +31,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    headers: {
+      // Required for some @huggingface/transformers WASM features (SharedArrayBuffer).
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    },
   },
 });

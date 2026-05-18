@@ -1,4 +1,4 @@
-# Cluely · Ambient AI Sales Copilot
+# Sherpa · A guide for every sales call
 
 A POC menu-bar Mac app that helps salespeople in real time — discovery
 questions, objection handling, pricing framing, competitive positioning,
@@ -10,7 +10,7 @@ base is the [coffeeandai](https://github.com/ajithpunnakula/coffeeandai)
 wiki, which lives in a sibling directory and is **read-only**. This app never
 writes to the source repo.
 
-> **Honesty by design.** Cluely is *not* stealth software. The menu-bar icon
+> **Honesty by design.** Sherpa is *not* stealth software. The menu-bar icon
 > is always visible, the status bar tells you when the app is thinking, and
 > the mic/screen/accessibility permissions are off by default and clearly
 > labeled. The MVP works with manual paste only.
@@ -112,7 +112,7 @@ each mode.
 | `ANTHROPIC_MODEL` | Override default Claude model (default: `claude-sonnet-4-6`). |
 | `OPENAI_MODEL` | Override default OpenAI model (default: `gpt-4o-mini`). |
 | `COFFEEANDAI_REPO` | Path to the source wiki repo (default: `~/code/coffeeandai`). |
-| `CLUELY_INDEX` | Override path to the built index JSON. |
+| `SHERPA_INDEX` | Override path to the built index JSON. |
 
 Without any LLM key, the app still runs and shows retrieved wiki snippets
 with a clearly-labeled stub response — useful for previewing the UI.
@@ -138,7 +138,7 @@ fully on manual paste alone.
 ## Project layout
 
 ```
-cluely/
+sherpa/
 ├── electron/                main process (TypeScript, CommonJS at build time)
 │   ├── main.ts              tray, hotkey, IPC, window mgmt
 │   ├── preload.ts           contextBridge bridge for the renderer
@@ -155,7 +155,7 @@ cluely/
 ├── src/                     React renderer (Vite)
 │   ├── App.tsx
 │   ├── components/          ModeSwitcher, StatusBar, SuggestionCard, Sources, DemoMenu
-│   ├── lib/cluely.ts        Typed IPC client (graceful browser fallback)
+│   ├── lib/sherpa.ts        Typed IPC client (graceful browser fallback)
 │   └── lib/demos.ts         8 built-in demo scenarios
 ├── scripts/
 │   └── build-index.ts       Walks coffeeandai/{wiki,raw,courses,...} and writes .data/index.json

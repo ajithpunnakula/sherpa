@@ -66,7 +66,8 @@ export interface SherpaApi {
   meta: () => Promise<SherpaMeta>;
   openPerms: (which: "microphone" | "screen" | "accessibility") => Promise<boolean>;
   hide: () => Promise<void>;
-  log: (msg: unknown | { level: "info" | "warn" | "error"; src: string; msg: string }) => void;
+  setTransparent: (on: boolean) => Promise<void>;
+  log: (msg: unknown | { level: "debug" | "info" | "warn" | "error"; src: string; msg: string }) => void;
   transcript: (entry: { source: "me" | "them"; text: string; ts: number }) => void;
   onStream: (cb: (frame: StreamFrame) => void) => () => void;
   onStatus: (cb: (s: string) => void) => () => void;
@@ -115,6 +116,7 @@ export function api(): SherpaApi {
     },
     async openPerms() { return false; },
     async hide() {},
+    async setTransparent() {},
     log() {},
     transcript() {},
     onStream() { return () => {}; },

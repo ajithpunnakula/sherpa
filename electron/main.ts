@@ -1,33 +1,51 @@
 import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, shell, screen, systemPreferences, session, desktopCapturer } from "electron";
 import { promises as fs, existsSync, createWriteStream, mkdirSync, WriteStream } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { CopilotService } from "./service";
 
 // ---------------------------------------------------------------------------
-// File logger — every meaningful event goes here so we can `tail -f` and so a
-// future Claude session can read the log without screenshots.
+// User-data directories — everything writable lives under ~/.sherpa/* so the
+// repo itself stays read-only. Override with SHERPA_HOME for tests.
 // ---------------------------------------------------------------------------
+const SHERPA_HOME = process.env.SHERPA_HOME ?? join(homedir(), ".sherpa");
+const LOG_DIR = join(SHERPA_HOME, "logs");
+const TRANSCRIPT_DIR = join(SHERPA_HOME, "transcripts");
+const INDEX_DIR = join(SHERPA_HOME, "index");
+
+// ---------------------------------------------------------------------------
+// File logger — info/warn/error always written; debug only when
+// SHERPA_LOG_LEVEL=debug. This keeps per-audio-chunk events out of the file by
+// default while leaving a knob for deep debugging.
+// ---------------------------------------------------------------------------
+
+type LogLevel = "debug" | "info" | "warn" | "error";
+const LEVEL_RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
+const MIN_LEVEL: LogLevel = ((): LogLevel => {
+  const env = (process.env.SHERPA_LOG_LEVEL ?? "info").toLowerCase();
+  return (env === "debug" || env === "info" || env === "warn" || env === "error") ? env : "info";
+})();
 
 let logStream: WriteStream | null = null;
 let logPath = "";
 
-function initLogger(projectRoot: string): void {
-  const dir = join(projectRoot, ".data");
-  try { mkdirSync(dir, { recursive: true }); } catch {}
-  logPath = join(dir, "sherpa-dev.log");
+function initLogger(): void {
+  try { mkdirSync(LOG_DIR, { recursive: true }); } catch {}
+  logPath = join(LOG_DIR, "sherpa.log");
   logStream = createWriteStream(logPath, { flags: "a" });
-  const banner = `\n=== sherpa dev session started ${new Date().toISOString()} (pid ${process.pid}) ===\n`;
+  const banner = `\n=== sherpa session started ${new Date().toISOString()} (pid ${process.pid}, level=${MIN_LEVEL}) ===\n`;
   logStream.write(banner);
   // eslint-disable-next-line no-console
   console.log("[sherpa] log file:", logPath);
 
-  // Capture main-process console as well.
-  const orig = { log: console.log, warn: console.warn, error: console.error };
-  const wrap = (level: "log" | "warn" | "error") => (...args: unknown[]) => {
-    orig[level](...args);
-    log(level === "log" ? "info" : level, "main", args.map(fmtArg).join(" "));
+  // Capture main-process console as well. console.debug → debug level (gated).
+  const orig = { log: console.log, debug: console.debug, warn: console.warn, error: console.error };
+  const wrap = (level: LogLevel) => (...args: unknown[]) => {
+    orig[level === "debug" ? "debug" : level === "info" ? "log" : level](...args);
+    log(level, "main", args.map(fmtArg).join(" "));
   };
-  console.log = wrap("log");
+  console.log = wrap("info");
+  console.debug = wrap("debug");
   console.warn = wrap("warn");
   console.error = wrap("error");
 
@@ -40,24 +58,24 @@ function fmtArg(a: unknown): string {
   try { return JSON.stringify(a); } catch { return String(a); }
 }
 
-function log(level: "info" | "warn" | "error", src: string, msg: string): void {
+function log(level: LogLevel, src: string, msg: string): void {
   if (!logStream) return;
+  if (LEVEL_RANK[level] < LEVEL_RANK[MIN_LEVEL]) return;
   const line = `${new Date().toISOString()} [${src}] [${level}] ${msg}\n`;
   logStream.write(line);
 }
 
 // Per-call transcript log. One JSONL file per app session, lazily created on
-// first transcript chunk. Lives alongside sherpa-dev.log so it's easy to find.
+// first transcript chunk. Lives in ~/.sherpa/transcripts/ for easy review.
 let callLogStream: WriteStream | null = null;
 let callLogPath = "";
 
 function appendCallLog(entry: { source: "me" | "them"; text: string; ts: number }): void {
   if (!callLogStream) {
-    const dir = join(PROJECT_ROOT, ".data", "calls");
-    try { mkdirSync(dir, { recursive: true }); } catch {}
-    callLogPath = join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
+    try { mkdirSync(TRANSCRIPT_DIR, { recursive: true }); } catch {}
+    callLogPath = join(TRANSCRIPT_DIR, `${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
     callLogStream = createWriteStream(callLogPath, { flags: "a" });
-    console.log("[sherpa] call log:", callLogPath);
+    console.log("[sherpa] transcript:", callLogPath);
   }
   callLogStream.write(JSON.stringify(entry) + "\n");
 }
@@ -69,7 +87,16 @@ function appendCallLog(entry: { source: "me" | "them"; text: string; ts: number 
 const isDev = process.env.NODE_ENV === "development";
 // At build time main.js lives at dist-electron/electron/main.js → project root is two levels up.
 const PROJECT_ROOT = resolve(__dirname, "..", "..");
-const INDEX_PATH = process.env.SHERPA_INDEX ?? join(PROJECT_ROOT, ".data", "index.json");
+// Resolve index path: explicit env wins, else ~/.sherpa/index/index.json, else
+// legacy .data/index.json (kept so existing installs still work).
+const INDEX_PATH = ((): string => {
+  if (process.env.SHERPA_INDEX) return process.env.SHERPA_INDEX;
+  const userPath = join(INDEX_DIR, "index.json");
+  if (existsSync(userPath)) return userPath;
+  const legacy = join(PROJECT_ROOT, ".data", "index.json");
+  if (existsSync(legacy)) return legacy;
+  return userPath;
+})();
 
 let panel: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -115,21 +142,19 @@ function trayTitle(): string {
 // Panel window
 // ---------------------------------------------------------------------------
 
-// Side-dock geometry: thin column on the right edge, half the work-area
-// height, top-aligned. Resizable so the user can widen or lengthen it.
+// Side-dock geometry: thin column on the right edge, full work-area height.
+// Resizable so the user can widen or lengthen it.
 const PANEL_WIDTH = 380;
-const PANEL_HEIGHT_RATIO = 0.5;
 
 function createPanel(): BrowserWindow {
   const display = screen.getPrimaryDisplay();
   const { x: waX, y: waY, width: waW, height: waH } = display.workArea;
-  const panelH = Math.round(waH * PANEL_HEIGHT_RATIO);
   const x = waX + waW - PANEL_WIDTH;
   const y = waY;
 
   const win = new BrowserWindow({
     width: PANEL_WIDTH,
-    height: panelH,
+    height: waH,
     x,
     y,
     minWidth: 280,
@@ -139,9 +164,10 @@ function createPanel(): BrowserWindow {
     resizable: true,
     transparent: true,
     hasShadow: false,
-    // No vibrancy — it draws an opaque-ish NSVisualEffectView behind the
-    // webview that defeats CSS transparency. Backdrop-filter on .glass
-    // blurs the actual desktop pixels for legibility.
+    // macOS vibrancy gives the glassy default. The "fully transparent" toggle
+    // switches this off at runtime via panel.setVibrancy(null).
+    vibrancy: "hud",
+    visualEffectState: "active",
     alwaysOnTop: true,
     skipTaskbar: true,
     fullscreenable: false,
@@ -193,11 +219,7 @@ function dockPanelRight(): void {
   const { x: waX, y: waY, width: waW, height: waH } = display.workArea;
   const bounds = panel.getBounds();
   const currentWidth = bounds.width || PANEL_WIDTH;
-  // Preserve the user's chosen height if they've resized; otherwise default
-  // to half the work-area height, top-aligned.
-  const currentHeight = bounds.height && bounds.height !== waH
-    ? bounds.height
-    : Math.round(waH * PANEL_HEIGHT_RATIO);
+  const currentHeight = bounds.height || waH;
   panel.setBounds({
     x: waX + waW - currentWidth,
     y: waY,
@@ -384,7 +406,16 @@ function registerIpc(): void {
     panel?.hide();
   });
 
-  ipcMain.on("sherpa:log", (_e, payload: { level?: "info" | "warn" | "error"; src?: string; msg?: string } | string) => {
+  ipcMain.handle("sherpa:set-transparent", (_e, transparent: boolean) => {
+    if (!panel) return;
+    // Vibrancy off → CSS bg is fully see-through, so the panel goes truly
+    // transparent. Vibrancy on → macOS HUD material gives the glassy default.
+    if (process.platform === "darwin") {
+      panel.setVibrancy(transparent ? null : "hud");
+    }
+  });
+
+  ipcMain.on("sherpa:log", (_e, payload: { level?: LogLevel; src?: string; msg?: string } | string) => {
     if (typeof payload === "string") {
       log("info", "renderer", payload);
       return;
@@ -432,7 +463,7 @@ function registerMediaPermissions(): void {
 }
 
 app.whenReady().then(async () => {
-  initLogger(PROJECT_ROOT);
+  initLogger();
   // Load .env if present (very small, no need for a dep)
   await loadDotEnv(join(PROJECT_ROOT, ".env"));
   registerMediaPermissions();

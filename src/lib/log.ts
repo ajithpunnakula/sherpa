@@ -1,9 +1,10 @@
 // Forwards renderer console output + uncaught errors to the main process,
-// which writes them to .data/sherpa-dev.log. Lets us debug without screenshots.
+// which writes them to ~/.sherpa/logs/sherpa.log. `console.debug` is forwarded
+// at debug level and only written when SHERPA_LOG_LEVEL=debug in main.
 
 import { api } from "./sherpa";
 
-type Level = "info" | "warn" | "error";
+type Level = "debug" | "info" | "warn" | "error";
 
 function fmt(args: unknown[]): string {
   return args
@@ -20,9 +21,15 @@ export function installRendererLogForwarding(): void {
     try { api().log({ level, src: "renderer", msg }); } catch {}
   };
 
-  const orig = { log: console.log.bind(console), warn: console.warn.bind(console), error: console.error.bind(console) };
-  console.log = (...args: unknown[]) => { orig.log(...args); send("info",  fmt(args)); };
-  console.warn = (...args: unknown[]) => { orig.warn(...args); send("warn",  fmt(args)); };
+  const orig = {
+    log: console.log.bind(console),
+    debug: console.debug.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+  };
+  console.log   = (...args: unknown[]) => { orig.log(...args);   send("info",  fmt(args)); };
+  console.debug = (...args: unknown[]) => { orig.debug(...args); send("debug", fmt(args)); };
+  console.warn  = (...args: unknown[]) => { orig.warn(...args);  send("warn",  fmt(args)); };
   console.error = (...args: unknown[]) => { orig.error(...args); send("error", fmt(args)); };
 
   window.addEventListener("error", (e) => {

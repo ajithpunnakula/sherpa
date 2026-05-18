@@ -45,6 +45,7 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     document.body.dataset.transparent = transparent ? "true" : "false";
     try { localStorage.setItem("sherpa.transparent", transparent ? "1" : "0"); } catch {}
+    void api().setTransparent(transparent);
   }, [transparent]);
 
   const listenerRef = useRef<Listener | null>(null);
@@ -383,8 +384,8 @@ export function App(): React.JSX.Element {
 function AnswerCard({ answer }: { answer: Answer }): React.JSX.Element {
   const parsed = useMemo(() => parseSpeakerAnswer(answer.text), [answer.text]);
   // 'why' and 'sources' are intentionally NOT shown — too noisy during a live
-  // call. They're still emitted by the LLM and written to the call log
-  // (.data/calls/*.jsonl) for after-the-fact review.
+  // call. They're still emitted by the LLM and written to the transcript log
+  // (~/.sherpa/transcripts/*.jsonl) for after-the-fact review.
   return (
     <div style={{ padding: "10px 14px 14px", borderBottom: "1px solid var(--border)" }}>
       <div style={{

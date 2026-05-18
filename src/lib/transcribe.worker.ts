@@ -97,12 +97,15 @@ self.onmessage = async (e: MessageEvent) => {
       const rtf = inferMs / 1000 / audioSec; // real-time factor: <1 = faster than realtime
       const sentAt = typeof msg.sentAt === "number" ? msg.sentAt : null;
       const queueMs = sentAt !== null ? t0 - sentAt : null;
-      console.log(
+      // Per-window perf line — one every ~3s when listening. Demote to debug,
+      // but escalate to warn if we're slower than realtime (that's actionable).
+      const perfLine =
         `${LOG} #${id} device=${activeDevice} audioSec=${audioSec.toFixed(1)} ` +
         `inferMs=${inferMs.toFixed(0)} rtf=${rtf.toFixed(2)}x ` +
         (queueMs !== null ? `queueMs=${queueMs.toFixed(0)} ` : "") +
-        `chars=${text.length}${rtf > 1 ? " SLOW(>realtime)" : ""}`,
-      );
+        `chars=${text.length}`;
+      if (rtf > 1) console.warn(`${perfLine} SLOW(>realtime)`);
+      else console.debug(perfLine);
       (self as DedicatedWorkerGlobalScope).postMessage({
         type: "transcript",
         text,

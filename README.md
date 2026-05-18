@@ -158,8 +158,8 @@ sherpa/
 │   ├── lib/sherpa.ts        Typed IPC client (graceful browser fallback)
 │   └── lib/demos.ts         8 built-in demo scenarios
 ├── scripts/
-│   └── build-index.ts       Walks coffeeandai/{wiki,raw,courses,...} and writes .data/index.json
-├── .data/index.json         Built index (gitignored)
+│   └── build-index.ts       Walks coffeeandai/{wiki,raw,courses,...} and writes ~/.sherpa/index/index.json
+├── ~/.sherpa/                User data dir (logs, transcripts, index — created on first run)
 ├── tsconfig.json            renderer + server (ESM-ish, bundler resolution)
 ├── electron/tsconfig.json   Electron main process (CommonJS, outputs to dist-electron/)
 ├── vite.config.ts

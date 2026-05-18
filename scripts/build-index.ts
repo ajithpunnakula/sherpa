@@ -1,12 +1,15 @@
 #!/usr/bin/env tsx
 import { promises as fs } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { chunkMarkdown } from "../server/kb/chunker.js";
 import { buildIndex } from "../server/kb/retriever.js";
 import type { Chunk } from "../server/kb/types.js";
 
 const REPO = process.env.COFFEEANDAI_REPO ?? resolve(process.env.HOME ?? "", "code/coffeeandai");
-const OUT = resolve(process.cwd(), ".data/index.json");
+const SHERPA_HOME = process.env.SHERPA_HOME ?? join(homedir(), ".sherpa");
+// Output to ~/.sherpa/index/index.json by default. Override with SHERPA_INDEX.
+const OUT = process.env.SHERPA_INDEX ?? join(SHERPA_HOME, "index", "index.json");
 
 // Source paths to crawl (relative to the repo). Read-only.
 const TARGETS: { path: string; recursive: boolean }[] = [
@@ -93,7 +96,7 @@ async function main(): Promise<void> {
   console.log(`  Chunks:      ${allChunks.length}`);
 
   const index = buildIndex(allChunks, REPO);
-  await fs.mkdir(resolve(process.cwd(), ".data"), { recursive: true });
+  await fs.mkdir(dirname(OUT), { recursive: true });
   await fs.writeFile(OUT, JSON.stringify(index));
 
   const sizeKb = ((await fs.stat(OUT)).size / 1024).toFixed(1);

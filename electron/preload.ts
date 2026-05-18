@@ -30,6 +30,7 @@ const api = {
   openPerms: (which: "microphone" | "screen" | "accessibility") =>
     ipcRenderer.invoke("sherpa:open-perms", which),
   hide: () => ipcRenderer.invoke("sherpa:hide"),
+  setTransparent: (on: boolean) => ipcRenderer.invoke("sherpa:set-transparent", on),
   log: (msg: unknown) => ipcRenderer.send("sherpa:log", msg),
   transcript: (entry: { source: "me" | "them"; text: string; ts: number }) =>
     ipcRenderer.send("sherpa:transcript", entry),

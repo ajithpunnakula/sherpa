@@ -191,7 +191,8 @@ export class Listener {
       state.totalFrames = 0;
 
       if (voicedFraction < MIN_VOICED_FRACTION) {
-        console.log(`${Listener.LOG} drop=silence source=${state.source} voiced=${(voicedFraction * 100).toFixed(0)}%`);
+        // Fires every ~3s per source when nobody's talking — debug-only.
+        console.debug(`${Listener.LOG} drop=silence source=${state.source} voiced=${(voicedFraction * 100).toFixed(0)}%`);
         return;
       }
       this.enqueue({ source: state.source, samples: merged, ts });

@@ -1,7 +1,7 @@
 {
-  "name": "cluely",
+  "name": "sherpa",
   "version": "0.1.0",
-  "description": "Ambient AI sales copilot — menu-bar Mac app grounded in the coffeeandai wiki",
+  "description": "Sherpa — a guide for every sales call. Menu-bar Mac copilot grounded in the coffeeandai wiki.",
   "private": true,
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@huggingface/transformers": "^4.2.0",
     "openai": "^4.77.0"
   },
   "devDependencies": {

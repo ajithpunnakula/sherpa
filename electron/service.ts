@@ -1,8 +1,11 @@
 import { promises as fs } from "node:fs";
 import { basename } from "node:path";
-import { retrieve } from "../server/kb/retriever";
 import { selectProvider, type Provider, type ProviderEnv } from "../server/copilot/providers";
-import { runCopilot } from "../server/copilot/orchestrator";
+import {
+  runCopilot,
+  runCopilotStream,
+  type Turn,
+} from "../server/copilot/orchestrator";
 import type { Index } from "../server/kb/types";
 import type { ModeId } from "../server/copilot/modes";
 
@@ -12,6 +15,13 @@ export interface IndexInfo {
   repo: string;
   builtAt: string;
   path: string;
+}
+
+export interface RunPayload {
+  mode: string;
+  context: string;
+  history?: Turn[];
+  preferred?: "anthropic" | "openai";
 }
 
 export class CopilotService {
@@ -55,16 +65,33 @@ export class CopilotService {
     };
   }
 
-  async run(payload: { mode: string; context: string; preferred?: "anthropic" | "openai" }) {
+  async run(payload: RunPayload, signal?: AbortSignal) {
     if (!this.index) throw new Error("Index not loaded. Run `npm run index`.");
-    const provider = payload.preferred
-      ? selectProvider(this.env, payload.preferred)
-      : this.provider;
-    return runCopilot({
+    const provider = this.providerFor(payload.preferred);
+    const req = {
       mode: payload.mode as ModeId,
       context: payload.context,
       index: this.index,
       provider,
-    });
+      history: payload.history,
+    };
+    return runCopilot(signal ? { ...req, signal } : req);
+  }
+
+  runStream(payload: RunPayload, signal?: AbortSignal) {
+    if (!this.index) throw new Error("Index not loaded. Run `npm run index`.");
+    const provider = this.providerFor(payload.preferred);
+    const req = {
+      mode: payload.mode as ModeId,
+      context: payload.context,
+      index: this.index,
+      provider,
+      history: payload.history,
+    };
+    return runCopilotStream(signal ? { ...req, signal } : req);
+  }
+
+  private providerFor(preferred?: "anthropic" | "openai"): Provider {
+    return preferred ? selectProvider(this.env, preferred) : this.provider;
   }
 }

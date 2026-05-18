@@ -1,41 +1,67 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+export interface Turn {
+  source: "me" | "them";
+  text: string;
+}
+
 export interface CopilotRunPayload {
   mode: string;
   context: string;
+  history?: Turn[];
   preferred?: "anthropic" | "openai";
 }
 
-const api = {
-  run: (payload: CopilotRunPayload) => ipcRenderer.invoke("cluely:run", payload),
-  meta: () => ipcRenderer.invoke("cluely:meta"),
-  openPerms: (which: "microphone" | "screen" | "accessibility") =>
-    ipcRenderer.invoke("cluely:open-perms", which),
-  hide: () => ipcRenderer.invoke("cluely:hide"),
-  log: (msg: unknown) => ipcRenderer.send("cluely:log", msg),
+export interface CopilotRunStreamPayload extends CopilotRunPayload {
+  id: string;
+}
 
+export type StreamFrame =
+  | { id: string; kind: "meta"; meta: unknown }
+  | { id: string; kind: "token"; delta: string }
+  | { id: string; kind: "done"; latencyMs: number }
+  | { id: string; kind: "error"; message: string };
+
+const api = {
+  run: (payload: CopilotRunPayload) => ipcRenderer.invoke("sherpa:run", payload),
+  runStream: (payload: CopilotRunStreamPayload) => ipcRenderer.invoke("sherpa:run-stream", payload),
+  cancelStream: (id: string) => ipcRenderer.invoke("sherpa:cancel-stream", id),
+  meta: () => ipcRenderer.invoke("sherpa:meta"),
+  openPerms: (which: "microphone" | "screen" | "accessibility") =>
+    ipcRenderer.invoke("sherpa:open-perms", which),
+  hide: () => ipcRenderer.invoke("sherpa:hide"),
+  setTransparent: (on: boolean) => ipcRenderer.invoke("sherpa:set-transparent", on),
+  log: (msg: unknown) => ipcRenderer.send("sherpa:log", msg),
+  transcript: (entry: { source: "me" | "them"; text: string; ts: number }) =>
+    ipcRenderer.send("sherpa:transcript", entry),
+
+  onStream: (cb: (frame: StreamFrame) => void) => {
+    const fn = (_: unknown, frame: StreamFrame) => cb(frame);
+    ipcRenderer.on("sherpa:stream", fn);
+    return () => ipcRenderer.removeListener("sherpa:stream", fn);
+  },
   onStatus: (cb: (s: string) => void) => {
     const fn = (_: unknown, s: string) => cb(s);
-    ipcRenderer.on("cluely:status", fn);
-    return () => ipcRenderer.removeListener("cluely:status", fn);
+    ipcRenderer.on("sherpa:status", fn);
+    return () => ipcRenderer.removeListener("sherpa:status", fn);
   },
   onIndexLoaded: (cb: (info: unknown) => void) => {
     const fn = (_: unknown, info: unknown) => cb(info);
-    ipcRenderer.on("cluely:index-loaded", fn);
-    return () => ipcRenderer.removeListener("cluely:index-loaded", fn);
+    ipcRenderer.on("sherpa:index-loaded", fn);
+    return () => ipcRenderer.removeListener("sherpa:index-loaded", fn);
   },
   onError: (cb: (err: { message: string }) => void) => {
     const fn = (_: unknown, err: { message: string }) => cb(err);
-    ipcRenderer.on("cluely:error", fn);
-    return () => ipcRenderer.removeListener("cluely:error", fn);
+    ipcRenderer.on("sherpa:error", fn);
+    return () => ipcRenderer.removeListener("sherpa:error", fn);
   },
   onFocus: (cb: () => void) => {
     const fn = () => cb();
-    ipcRenderer.on("cluely:focus", fn);
-    return () => ipcRenderer.removeListener("cluely:focus", fn);
+    ipcRenderer.on("sherpa:focus", fn);
+    return () => ipcRenderer.removeListener("sherpa:focus", fn);
   },
 };
 
-contextBridge.exposeInMainWorld("cluely", api);
+contextBridge.exposeInMainWorld("sherpa", api);
 
-export type CluelyApi = typeof api;
+export type SherpaApi = typeof api;

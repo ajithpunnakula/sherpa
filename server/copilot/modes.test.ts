@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import { MODES, getMode, type ModeId } from "./modes.js";
 
 describe("modes", () => {
-  it("exposes all 8 sales modes", () => {
+  it("exposes the live speaker mode plus all 8 sales modes", () => {
     const ids: ModeId[] = [
+      "speaker",
       "discovery",
       "demo",
       "objection",

@@ -17,7 +17,15 @@ export interface CopilotResult {
   latencyMs: number;
 }
 
-export interface CluelyMeta {
+export interface CopilotMeta {
+  mode: ModeId;
+  sources: CopilotSource[];
+  grounded: boolean;
+  providerKind: "anthropic" | "openai" | "stub";
+  model: string;
+}
+
+export interface SherpaMeta {
   indexInfo: {
     chunkCount: number;
     sourceCount: number;
@@ -33,12 +41,35 @@ export interface CluelyMeta {
   hotkey: string;
 }
 
-export interface CluelyApi {
-  run: (p: { mode: string; context: string; preferred?: "anthropic" | "openai" }) => Promise<CopilotResult>;
-  meta: () => Promise<CluelyMeta>;
+export interface Turn {
+  source: "me" | "them";
+  text: string;
+}
+
+export type StreamFrame =
+  | { id: string; kind: "meta"; meta: CopilotMeta }
+  | { id: string; kind: "token"; delta: string }
+  | { id: string; kind: "done"; latencyMs: number }
+  | { id: string; kind: "error"; message: string };
+
+export interface RunPayload {
+  mode: string;
+  context: string;
+  history?: Turn[];
+  preferred?: "anthropic" | "openai";
+}
+
+export interface SherpaApi {
+  run: (p: RunPayload) => Promise<CopilotResult>;
+  runStream: (p: RunPayload & { id: string }) => Promise<{ id: string }>;
+  cancelStream: (id: string) => Promise<boolean>;
+  meta: () => Promise<SherpaMeta>;
   openPerms: (which: "microphone" | "screen" | "accessibility") => Promise<boolean>;
   hide: () => Promise<void>;
-  log: (msg: unknown) => void;
+  setTransparent: (on: boolean) => Promise<void>;
+  log: (msg: unknown | { level: "debug" | "info" | "warn" | "error"; src: string; msg: string }) => void;
+  transcript: (entry: { source: "me" | "them"; text: string; ts: number }) => void;
+  onStream: (cb: (frame: StreamFrame) => void) => () => void;
   onStatus: (cb: (s: string) => void) => () => void;
   onIndexLoaded: (cb: (info: unknown) => void) => () => void;
   onError: (cb: (err: { message: string }) => void) => () => void;
@@ -47,30 +78,31 @@ export interface CluelyApi {
 
 declare global {
   interface Window {
-    cluely?: CluelyApi;
+    sherpa?: SherpaApi;
   }
 }
 
 /**
  * Returns the IPC API. When running in a plain browser (vite dev preview
- * without Electron), returns a stub that explains the situation and lets you
- * preview the UI.
+ * without Electron), returns a stub that explains the situation.
  */
-export function api(): CluelyApi {
-  if (typeof window !== "undefined" && window.cluely) return window.cluely;
-  const stub: CluelyApi = {
+export function api(): SherpaApi {
+  if (typeof window !== "undefined" && window.sherpa) return window.sherpa;
+  const stub: SherpaApi = {
     async run(p) {
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 200));
       return {
         mode: p.mode as ModeId,
-        text: `Recommended thing to say:\n"This is a browser-only preview — launch the Electron app to make real LLM calls."\n\nSources:\n- (none — preview mode)`,
+        text: `"Browser-only preview — launch the Electron app for real LLM calls."\n\nWhy: stub mode active.`,
         sources: [],
         grounded: false,
         providerKind: "stub",
         model: "browser-preview",
-        latencyMs: 400,
+        latencyMs: 200,
       };
     },
+    async runStream(p) { return { id: p.id }; },
+    async cancelStream() { return true; },
     async meta() {
       return {
         indexInfo: null,
@@ -84,7 +116,10 @@ export function api(): CluelyApi {
     },
     async openPerms() { return false; },
     async hide() {},
+    async setTransparent() {},
     log() {},
+    transcript() {},
+    onStream() { return () => {}; },
     onStatus() { return () => {}; },
     onIndexLoaded() { return () => {}; },
     onError() { return () => {}; },

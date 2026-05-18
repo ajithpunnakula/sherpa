@@ -8,8 +8,8 @@
 */
 
 :root {
-  --bg:        rgba(12, 12, 14, 0.55);
-  --bg-strong: rgba(18, 18, 22, 0.92);
+  --bg:        rgba(12, 12, 14, 0.28);
+  --bg-strong: rgba(18, 18, 22, 0.72);
   --stroke:    rgba(255, 255, 255, 0.06);
   --stroke-2:  rgba(255, 255, 255, 0.12);
   --stroke-3:  rgba(255, 255, 255, 0.22);
@@ -352,6 +352,8 @@ button { font-family: inherit; }
   font-weight: 500;
   margin: 8px 0 16px;
   white-space: pre-wrap;
+  /* Stays legible against a translucent panel over any wallpaper. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55), 0 0 2px rgba(0, 0, 0, 0.4);
 }
 .hero::before {
   content: "\201C";

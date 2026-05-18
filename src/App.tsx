@@ -374,14 +374,14 @@ function AnswerCard({ answer }: { answer: Answer }): React.JSX.Element {
   return (
     <div style={{ padding: "10px 14px 14px", borderBottom: "1px solid var(--border)" }}>
       <div style={{
-        fontSize: 11,
-        color: "var(--text-faint)",
+        fontSize: 12,
+        color: "rgba(245, 246, 248, 0.62)",
         marginBottom: 4,
         letterSpacing: "-0.005em",
-        opacity: 0.85,
+        textShadow: "0 1px 2px rgba(0, 0, 0, 0.55)",
       }}>
-        <span style={{ opacity: 0.7 }}>they said: </span>
-        <span style={{ color: "var(--text-dim)" }}>{answer.question}</span>
+        <span style={{ opacity: 0.75 }}>they said: </span>
+        <span style={{ color: "rgba(245, 246, 248, 0.92)" }}>{answer.question}</span>
       </div>
 
       {parsed.opportunity && (

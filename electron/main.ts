@@ -115,19 +115,21 @@ function trayTitle(): string {
 // Panel window
 // ---------------------------------------------------------------------------
 
-// Side-dock geometry: thin column on the right edge, full work-area height.
-// Resizable so the user can widen it; default fits most laptop screens.
+// Side-dock geometry: thin column on the right edge, half the work-area
+// height, top-aligned. Resizable so the user can widen or lengthen it.
 const PANEL_WIDTH = 380;
+const PANEL_HEIGHT_RATIO = 0.5;
 
 function createPanel(): BrowserWindow {
   const display = screen.getPrimaryDisplay();
   const { x: waX, y: waY, width: waW, height: waH } = display.workArea;
+  const panelH = Math.round(waH * PANEL_HEIGHT_RATIO);
   const x = waX + waW - PANEL_WIDTH;
   const y = waY;
 
   const win = new BrowserWindow({
     width: PANEL_WIDTH,
-    height: waH,
+    height: panelH,
     x,
     y,
     minWidth: 280,
@@ -188,12 +190,18 @@ function dockPanelRight(): void {
     ? screen.getDisplayNearestPoint({ x: pt.x, y: pt.y })
     : screen.getPrimaryDisplay();
   const { x: waX, y: waY, width: waW, height: waH } = display.workArea;
-  const currentWidth = panel.getBounds().width || PANEL_WIDTH;
+  const bounds = panel.getBounds();
+  const currentWidth = bounds.width || PANEL_WIDTH;
+  // Preserve the user's chosen height if they've resized; otherwise default
+  // to half the work-area height, top-aligned.
+  const currentHeight = bounds.height && bounds.height !== waH
+    ? bounds.height
+    : Math.round(waH * PANEL_HEIGHT_RATIO);
   panel.setBounds({
     x: waX + waW - currentWidth,
     y: waY,
     width: currentWidth,
-    height: waH,
+    height: currentHeight,
   });
 }
 

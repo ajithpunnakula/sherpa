@@ -62,12 +62,11 @@ export function App(): React.JSX.Element {
 
   useEffect(() => { historyRef.current = history; }, [history]);
 
-  // Auto-scroll the answer list to bottom whenever it changes.
+  // Auto-scroll the answer list to top whenever it changes — newest card is at the top.
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    // requestAnimationFrame so layout is flushed first.
-    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+    requestAnimationFrame(() => { el.scrollTop = 0; });
   }, [answers]);
 
   useEffect(() => {
@@ -117,10 +116,10 @@ export function App(): React.JSX.Element {
     setStatus("thinking");
     setAnswers((prev) => {
       const next: Answer[] = [
-        ...prev,
         { id, question, text: "", meta: null, latencyMs: null, streaming: true },
+        ...prev,
       ];
-      if (next.length > MAX_VISIBLE_ANSWERS) next.splice(0, next.length - MAX_VISIBLE_ANSWERS);
+      if (next.length > MAX_VISIBLE_ANSWERS) next.length = MAX_VISIBLE_ANSWERS;
       return next;
     });
     try {
@@ -225,14 +224,14 @@ export function App(): React.JSX.Element {
 
   const meterLevel = Math.max(levelMe, levelThem);
   const latestMeta = useMemo(() => {
-    for (let i = answers.length - 1; i >= 0; i--) {
-      if (answers[i]!.meta) return answers[i]!.meta!;
+    for (const a of answers) {
+      if (a.meta) return a.meta;
     }
     return null;
   }, [answers]);
   const latestLatency = useMemo(() => {
-    for (let i = answers.length - 1; i >= 0; i--) {
-      if (answers[i]!.latencyMs !== null) return answers[i]!.latencyMs!;
+    for (const a of answers) {
+      if (a.latencyMs !== null) return a.latencyMs;
     }
     return null;
   }, [answers]);
@@ -305,7 +304,7 @@ export function App(): React.JSX.Element {
             <AnswerCard key={ans.id} answer={ans} />
           ))}
 
-          {status === "thinking" && answers.length > 0 && answers[answers.length - 1]!.text === "" && (
+          {status === "thinking" && answers.length > 0 && answers[0]!.text === "" && (
             <div className="shimmer" style={{ margin: "0 14px" }} />
           )}
         </div>
